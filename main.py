@@ -4,8 +4,20 @@ import requests
 import random
 import html
 
+import sqlite3
+
 from discord.ext import commands
 from dotenv import load_dotenv
+
+db = sqlite3.connect("triviapoor.db")
+db.execute("""
+    CREATE TABLE IF NOT EXISTS user_stats (
+        user_id TEXT PRIMARY KEY,
+        correct_answers INTEGER NOT NULL DEFAULT 0,
+        wrong_answers INTEGER NOT NULL DEFAULT 0
+    )
+""")
+db.commit()
 
 base_url = "https://opentdb.com/api.php?"
 
@@ -65,6 +77,22 @@ bot = commands.Bot(command_prefix='$', intents=intents)
 async def on_ready():
     print(f'{bot.user} is on')
 
+@bot.command()
+async def points(ctx, user: discord.User = None):
+    user = user or ctx.author
+
+    row = db.execute(
+        "SELECT correct_answers, wrong_answers FROM user_stats WHERE user_id = ?",
+        (str(user.id),)
+    ).fetchone()
+
+    correct, wrong = row if row else (0, 0)
+
+    await ctx.send(
+        f"{user.display_name} has {correct} correct answer(s) "
+        f"and {wrong} wrong answer(s)."
+    )
+        
 
 @bot.command()
 async def trivia(ctx, category=None, difficulty=None):
@@ -77,10 +105,12 @@ async def trivia(ctx, category=None, difficulty=None):
             if msg.content == 'easy' or msg.content == 'medium' or msg.content == 'hard':
                 return msg.content
 
-    def answer_check(answer):
-        if answer.author == answer.author and answer.channel == answer.channel:
-            if answer.content in answers:
-                return answer.content
+    def answer_check(msg):
+        return (
+            msg.author == ctx.author
+            and msg.channel == ctx.channel
+            and msg.content in answers
+        )
             
     category_missing = False
     difficulty_missing = False
@@ -112,8 +142,23 @@ async def trivia(ctx, category=None, difficulty=None):
     await ctx.send(question_output)
     answer = await bot.wait_for("message", check=answer_check)
     if answer.content == correct_answer:
+        db.execute("""
+            INSERT INTO user_stats (user_id, correct_answers)
+            VALUES (?, 1)
+            ON CONFLICT(user_id)
+            DO UPDATE SET correct_answers = correct_answers + 1
+        """, (str(answer.author.id),))
+        db.commit()
         await ctx.send("Correct")
     else:
-        await ctx.send(f'Wrong, the correct answer is ||{correct_answer}||')
+        db.execute("""
+            INSERT INTO user_stats (user_id, wrong_answers)
+            VALUES (?, 1)
+            ON CONFLICT(user_id)
+            DO UPDATE SET wrong_answers = wrong_answers + 1
+        """, (str(answer.author.id),))
+        db.commit()
+        await ctx.send(f"Wrong, the correct answer is ||{correct_answer}||")
+
 
 bot.run(TOKEN)
